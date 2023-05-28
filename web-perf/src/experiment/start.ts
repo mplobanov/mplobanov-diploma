@@ -1,38 +1,78 @@
 import { useCallback } from "react";
 import { useAddMessage } from "../logger/hooks";
 import { ExperimentProps } from "./types";
-import { multipliers } from "../multiply/types";
-import { measureExecutionTime } from "../utils/measure";
+import { MultiplyType } from "../multiply/types";
 import { generateMatrix } from "../utils/generate";
+import { analyse } from "../utils/avgStd";
+import { makeTextFile } from "../utils/createFile";
+import VanillaWorker from "./worker.ts?worker";
+import TfWorker from "./tfWorker.ts?worker";
 
 export interface StartExperimentProps {
-    expProps: ExperimentProps;
-    onFinish: () => void;
+  expProps: ExperimentProps;
+  onFinish: () => void;
 }
 
 export const useExperiment = () => {
-    const addMessage = useAddMessage();
+  const addMessage = useAddMessage();
 
+  const finish = useCallback(
+    (times: number[], onFinish: StartExperimentProps["onFinish"]) => {
+      const { mean, std } = analyse(times);
 
-    const startExperiment = useCallback<(props: StartExperimentProps) => void>(({expProps, onFinish}) => {
-        const { N, M, K, trials, type } = expProps;
+      addMessage(`<strong>Finished</strong>: Mean = ${mean}, std = ${std}`);
 
-        addMessage(`Exp started N=${N} M=${M} K=${K} volume=${N * M * K}`);
+      onFinish();
+    },
+    [addMessage]
+  );
 
-        const multiplier = multipliers[type];
+  const copyToClipBoard = useCallback(
+    (data: ExperimentProps & { times: number[] }) => {
+      const url = makeTextFile(JSON.stringify(data));
+      addMessage(
+        `You can download <u><a href="${url}" download="${`${data.N}x${data.M}x${data.K}_${data.type}_${data.trials}.json`}">experiment data</a></u>.`
+      );
+    },
+    [addMessage]
+  );
 
-        const times = [];
+  const startExperiment = useCallback<(props: StartExperimentProps) => void>(
+    ({ expProps, onFinish }) => {
+      const { N, M, K, trials, type } = expProps;
 
-        Array.from(Array(trials).keys()).forEach(i => {
-            const matrixA = generateMatrix(N, M);
-            const matrixB = generateMatrix(M, K);
-            const time = measureExecutionTime(multiplier, matrixA, matrixB);
-            times.push(time);
-            addMessage(`Try: ${i}. Time = ${time} ms`);
-        })
+      addMessage(
+        `<strong>Exp started</strong> N=${N} M=${M} K=${K} volume=${N * M * K}`
+      );
 
-        onFinish();
-    }, [addMessage]);
+      const times: number[] = [];
 
-    return {startExperiment};
-}
+      let worker: typeof Worker | undefined = undefined;
+
+      if (type === MultiplyType.PlainJS) {
+        worker = new VanillaWorker();
+      } else {
+        worker = new TfWorker();
+      }
+
+      worker.onmessage = (e: MessageEvent<{ time: number; trial: number }>) => {
+        times.push(e.data.time);
+        addMessage(`Try: ${e.data.trial}. Time = ${e.data.time} ms`);
+        if (times.length === trials) {
+          finish(times, onFinish);
+          copyToClipBoard({ ...expProps, times });
+          worker.terminate();
+        }
+      };
+
+      Array.from(Array(trials).keys()).forEach((i) => {
+        const matrix1 = generateMatrix(N, M);
+        const matrix2 = generateMatrix(M, K);
+        worker.postMessage({ matrix1, matrix2, trial: i, type });
+      });
+    },
+    [addMessage, copyToClipBoard, finish]
+  );
+
+  return { startExperiment };
+};
