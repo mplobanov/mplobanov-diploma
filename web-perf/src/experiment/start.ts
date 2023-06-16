@@ -47,7 +47,8 @@ export const useExperiment = () => {
 
       const times: number[] = [];
 
-      let worker: typeof Worker | undefined = undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let worker: any = undefined;
 
       if (type === MultiplyType.PlainJS) {
         worker = new VanillaWorker();
@@ -62,14 +63,16 @@ export const useExperiment = () => {
           finish(times, onFinish);
           copyToClipBoard({ ...expProps, times });
           worker.terminate();
+        } else {
+          const matrix1 = generateMatrix(N, M);
+          const matrix2 = generateMatrix(M, K);
+          worker.postMessage({ matrix1, matrix2, trial: times.length, type });
         }
       };
 
-      Array.from(Array(trials).keys()).forEach((i) => {
-        const matrix1 = generateMatrix(N, M);
-        const matrix2 = generateMatrix(M, K);
-        worker.postMessage({ matrix1, matrix2, trial: i, type });
-      });
+      const matrix1 = generateMatrix(N, M);
+      const matrix2 = generateMatrix(M, K);
+      worker.postMessage({ matrix1, matrix2, trial: times.length, type });
     },
     [addMessage, copyToClipBoard, finish]
   );
